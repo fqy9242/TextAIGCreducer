@@ -73,6 +73,22 @@ async def test_authorization_scope_enforced(client) -> None:
     )
     assert operator_update_prompt.status_code == 403
 
+    operator_update_settings = await client.put(
+        "/api/v1/system-settings/runtime",
+        json={
+            "default_target_score": 18,
+            "default_max_rounds": 4,
+            "default_style": "deai_external",
+            "use_mock_llm": "true",
+            "openai_base_url": "https://api.openai.com/v1",
+            "openai_model": "gpt-4o-mini",
+            "openai_timeout_seconds": 60,
+            "openai_max_retries": 0,
+        },
+        headers=operator_headers,
+    )
+    assert operator_update_settings.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_bootstrap_admin_role_is_immutable(client) -> None:

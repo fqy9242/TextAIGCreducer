@@ -108,10 +108,18 @@ class TaskWorker:
                 await session.rollback()
                 detail = {"error": str(exc), "error_type": type(exc).__name__}
                 if type(exc).__name__ == "APITimeoutError":
-                    llm_settings = getattr(getattr(self.rewrite_agent, "llm_rewriter", None), "settings", None)
-                    timeout_seconds = getattr(llm_settings, "openai_timeout_seconds", None)
+                    timeout_seconds = None
+                    if hasattr(self.rewrite_agent, "get_runtime_settings"):
+                        try:
+                            runtime_settings = await self.rewrite_agent.get_runtime_settings(session)
+                            timeout_seconds = runtime_settings.openai_timeout_seconds
+                        except Exception:  # pragma: no cover - fallback hint only
+                            timeout_seconds = None
                     detail["openai_timeout_seconds"] = timeout_seconds
-                    detail["hint"] = "Increase OPENAI_TIMEOUT_SECONDS or check OPENAI_BASE_URL/model/network."
+                    detail["hint"] = (
+                        "Increase openai_timeout_seconds in system settings "
+                        "or check openai_base_url/model/network."
+                    )
                 await self._fail_task(
                     session=session,
                     task_id=task_id,

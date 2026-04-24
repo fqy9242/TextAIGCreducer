@@ -1,21 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, Field
-
-from app.core.config import get_settings
-
-
-settings = get_settings()
 
 
 class TaskCreateRequest(BaseModel):
     input_text: str = Field(min_length=20, max_length=20000)
-    target_score: float = Field(default=settings.default_target_score, ge=1, le=100)
-    max_rounds: int = Field(default=settings.default_max_rounds, ge=1, le=10)
-    style: Literal["deai_external"] = Field(default="deai_external")
+    target_score: float | None = Field(default=None, ge=1, le=100)
+    max_rounds: int | None = Field(default=None, ge=1, le=10)
+    style: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class TaskIterationOut(BaseModel):

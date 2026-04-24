@@ -5,7 +5,7 @@ export interface CreateTaskPayload {
   input_text: string;
   target_score: number;
   max_rounds: number;
-  style: "deai_external";
+  style: string;
 }
 
 export async function createTask(payload: CreateTaskPayload): Promise<TaskResult> {

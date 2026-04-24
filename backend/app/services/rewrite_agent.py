@@ -12,6 +12,7 @@ from app.services.detectors import BaseDetector, DetectorResult
 from app.services.external_skill_rules import ExternalSkillRulesLoader
 from app.services.llm_rewriter import LLMRewriter
 from app.services.prompt_manager import PromptManager, PromptSpec
+from app.services.system_settings import SystemSettingsService
 from app.services.task_log import add_task_log
 
 
@@ -22,20 +23,37 @@ class RewriteAgent:
         llm_rewriter: LLMRewriter,
         detector: BaseDetector,
         external_rules_loader: ExternalSkillRulesLoader | None = None,
+        system_settings_service: SystemSettingsService | None = None,
     ):
         self.prompt_manager = prompt_manager
         self.llm_rewriter = llm_rewriter
         self.detector = detector
         self.external_rules_loader = external_rules_loader
+        self.system_settings_service = system_settings_service
+
+    async def get_runtime_settings(self, session: AsyncSession):
+        service = self.system_settings_service
+        if service is None:
+            service = SystemSettingsService(self.llm_rewriter.settings)
+        return await service.get_runtime_settings(session, self.prompt_manager)
 
     async def run_task(self, session: AsyncSession, task: RewriteTask) -> None:
+        runtime_settings = await self.get_runtime_settings(session)
+        default_style = runtime_settings.default_style
+        llm_mode = self.llm_rewriter.resolve_llm_mode(runtime_settings)
         await add_task_log(
             session,
             task_id=task.id,
             stage="agent",
             level="info",
             message="开始执行改写闭环。",
-            detail={"style": task.style, "target_score": task.target_score, "max_rounds": task.max_rounds},
+            detail={
+                "style": task.style,
+                "target_score": task.target_score,
+                "max_rounds": task.max_rounds,
+                "llm_mode": llm_mode,
+                "llm_model": runtime_settings.openai_model,
+            },
         )
         style_instruction = ""
         try:
@@ -43,10 +61,14 @@ class RewriteAgent:
             style_instruction = style_prompt.instruction
         except KeyError:
             try:
-                style_prompt = self.prompt_manager.get_prompt("style", "deai_external")
+                style_prompt = self.prompt_manager.get_prompt("style", default_style)
                 style_instruction = style_prompt.instruction
             except KeyError:
-                style_instruction = ""
+                try:
+                    style_prompt = self.prompt_manager.get_prompt("style", "deai_external")
+                    style_instruction = style_prompt.instruction
+                except KeyError:
+                    style_instruction = ""
 
         if self._should_apply_external_rules(task.style):
             style_instruction = self._inject_external_rules(style_instruction)
@@ -56,7 +78,10 @@ class RewriteAgent:
             try:
                 rewrite_prompt = self.prompt_manager.get_prompt("rewrite", prompt_name)
             except KeyError:
-                rewrite_prompt = self.prompt_manager.get_prompt("rewrite", "deai_external")
+                try:
+                    rewrite_prompt = self.prompt_manager.get_prompt("rewrite", default_style)
+                except KeyError:
+                    rewrite_prompt = self.prompt_manager.get_prompt("rewrite", "deai_external")
 
             return {
                 **state,
@@ -69,6 +94,7 @@ class RewriteAgent:
             start = perf_counter()
             candidate_text = await self.llm_rewriter.rewrite(
                 rewrite_prompt=state["rewrite_prompt"],
+                runtime_settings=runtime_settings,
                 style_instruction=style_instruction,
                 original_text=state["input_text"],
                 previous_text=state["current_text"],
@@ -128,7 +154,7 @@ class RewriteAgent:
                     latency_ms=int(state["latency_ms"]),
                     detector_raw={
                         **detector_result.raw,
-                        "llm_mode": self.llm_rewriter.llm_mode,
+                        "llm_mode": llm_mode,
                     },
                 )
             )

@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from app.core.config import Settings
+from app.schemas.system_settings import RuntimeSettingsOut
 from app.services.prompt_manager import PromptSpec
 
 
@@ -14,32 +15,34 @@ class LLMRewriter:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._chat_model = None
-        if not settings.use_mock_llm_flag:
-            self._chat_model = ChatOpenAI(
-                model=settings.openai_model,
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
-                temperature=0.85,
-                timeout=settings.openai_timeout_seconds,
-                max_retries=max(0, settings.openai_max_retries),
-            )
+        self._chat_model_key: tuple[str, str, int, int] | None = None
 
-    @property
-    def llm_mode(self) -> str:
-        return "mock" if self._chat_model is None else "real"
+    def resolve_llm_mode(self, runtime_settings: RuntimeSettingsOut) -> str:
+        return "mock" if self.should_use_mock_llm(runtime_settings) else "real"
+
+    def should_use_mock_llm(self, runtime_settings: RuntimeSettingsOut) -> bool:
+        value = runtime_settings.use_mock_llm.strip().lower()
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return not bool(self.settings.openai_api_key.strip())
 
     async def rewrite(
         self,
         rewrite_prompt: PromptSpec,
+        runtime_settings: RuntimeSettingsOut,
         style_instruction: str,
         original_text: str,
         previous_text: str,
         round_index: int,
     ) -> str:
-        if self._chat_model is None:
+        chat_model = self._get_chat_model(runtime_settings)
+        if chat_model is None:
             return self._mock_rewrite(original_text, previous_text, round_index)
 
         candidate = await self._call_model(
+            chat_model=chat_model,
             rewrite_prompt=rewrite_prompt,
             style_instruction=style_instruction,
             original_text=original_text,
@@ -57,6 +60,7 @@ class LLMRewriter:
                 "在不改变事实的前提下，改写后与输入在表达层面应有显著差异。"
             )
             second_pass = await self._call_model(
+                chat_model=chat_model,
                 rewrite_prompt=rewrite_prompt,
                 style_instruction=stronger_instruction,
                 original_text=original_text,
@@ -71,6 +75,7 @@ class LLMRewriter:
 
     async def _call_model(
         self,
+        chat_model: ChatOpenAI,
         rewrite_prompt: PromptSpec,
         style_instruction: str,
         original_text: str,
@@ -83,7 +88,7 @@ class LLMRewriter:
                 ("human", rewrite_prompt.human),
             ]
         )
-        chain = prompt | self._chat_model
+        chain = prompt | chat_model
         result = await chain.ainvoke(
             {
                 "original_text": original_text,
@@ -93,6 +98,30 @@ class LLMRewriter:
             }
         )
         return str(result.content)
+
+    def _get_chat_model(self, runtime_settings: RuntimeSettingsOut) -> ChatOpenAI | None:
+        if self.should_use_mock_llm(runtime_settings):
+            return None
+
+        config_key = (
+            runtime_settings.openai_model,
+            runtime_settings.openai_base_url,
+            runtime_settings.openai_timeout_seconds,
+            max(0, runtime_settings.openai_max_retries),
+        )
+        if self._chat_model is not None and self._chat_model_key == config_key:
+            return self._chat_model
+
+        self._chat_model = ChatOpenAI(
+            model=runtime_settings.openai_model,
+            api_key=self.settings.openai_api_key,
+            base_url=runtime_settings.openai_base_url,
+            temperature=0.85,
+            timeout=runtime_settings.openai_timeout_seconds,
+            max_retries=max(0, runtime_settings.openai_max_retries),
+        )
+        self._chat_model_key = config_key
+        return self._chat_model
 
     @staticmethod
     def _is_too_similar(source: str, candidate: str) -> bool:

@@ -1,23 +1,34 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import { getRuntimeSettings } from "@/api/systemSettings";
 import { useTaskStore } from "@/stores/task";
 import ScoreTag from "@/components/ScoreTag.vue";
+import type { RuntimeSettings } from "@/types";
 
 const router = useRouter();
 const taskStore = useTaskStore();
-const DEFAULT_STYLE = "deai_external" as const;
+const runtimeSettings = ref<RuntimeSettings | null>(null);
+const loadingSettings = ref(false);
 
 const form = reactive({
   input_text:
     "请输入需要降AIGC率的中文文本。系统会在保持语义和逻辑的前提下进行多轮改写，并使用检测适配层进行闭环评估。",
   target_score: 20,
   max_rounds: 3,
+  style: "deai_external",
 });
 
 const working = ref(false);
 const latestTaskId = ref("");
+const styleOptions = computed(() => {
+  if (runtimeSettings.value?.available_styles?.length) {
+    return runtimeSettings.value.available_styles;
+  }
+  return [form.style];
+});
+const llmModeLabel = computed(() => (runtimeSettings.value?.effective_llm_mode === "real" ? "Real" : "Mock"));
 
 function formatElapsed(seconds: number | null | undefined): string {
   if (seconds == null) return "--";
@@ -33,6 +44,21 @@ function formatElapsed(seconds: number | null | undefined): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
+async function loadRuntimeConfig() {
+  loadingSettings.value = true;
+  try {
+    const settings = await getRuntimeSettings();
+    runtimeSettings.value = settings;
+    form.target_score = settings.default_target_score;
+    form.max_rounds = settings.default_max_rounds;
+    form.style = settings.default_style;
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail ?? "加载系统设置失败");
+  } finally {
+    loadingSettings.value = false;
+  }
+}
+
 async function submitTask() {
   if (form.input_text.trim().length < 20) {
     ElMessage.warning("文本至少需要 20 个字符");
@@ -45,7 +71,7 @@ async function submitTask() {
       input_text: form.input_text,
       target_score: form.target_score,
       max_rounds: form.max_rounds,
-      style: DEFAULT_STYLE,
+      style: form.style,
     });
     latestTaskId.value = task.id;
     ElMessage.success("任务已提交，正在执行闭环改写");
@@ -71,6 +97,10 @@ function openTaskDetail() {
   if (!latestTaskId.value) return;
   router.push({ name: "task-detail", params: { id: latestTaskId.value } });
 }
+
+onMounted(async () => {
+  await loadRuntimeConfig();
+});
 </script>
 
 <template>
@@ -79,10 +109,10 @@ function openTaskDetail() {
       <el-button type="primary" :disabled="!latestTaskId" @click="openTaskDetail">查看最新任务</el-button>
     </div>
 
-    <div class="kpi-row">
+    <div class="kpi-row" v-loading="loadingSettings">
       <div class="kpi-card">
         <span>策略模式</span>
-        <strong>deai_external</strong>
+        <strong>{{ form.style }}</strong>
       </div>
       <div class="kpi-card">
         <span>目标阈值</span>
@@ -92,11 +122,15 @@ function openTaskDetail() {
         <span>最大轮次</span>
         <strong>{{ form.max_rounds }} 轮</strong>
       </div>
+      <div class="kpi-card">
+        <span>LLM 模式</span>
+        <strong>{{ llmModeLabel }}</strong>
+      </div>
     </div>
 
     <div class="grid-two">
       <article class="app-card panel">
-        <el-form label-position="top">
+        <el-form label-position="top" v-loading="loadingSettings">
           <el-form-item label="原始文本">
             <el-input
               v-model="form.input_text"
@@ -115,7 +149,9 @@ function openTaskDetail() {
               <el-input-number v-model="form.max_rounds" :min="1" :max="10" />
             </el-form-item>
             <el-form-item label="策略">
-              <el-input model-value="deai_external（固定）" readonly />
+              <el-select v-model="form.style">
+                <el-option v-for="item in styleOptions" :key="item" :label="item" :value="item" />
+              </el-select>
             </el-form-item>
           </div>
           <el-button type="primary" :loading="working" class="submit-btn" @click="submitTask">启动智能改写</el-button>
@@ -167,7 +203,7 @@ function openTaskDetail() {
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }

@@ -138,12 +138,26 @@ async def create_task(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(require_permission(PERM_TASK_CREATE)),
 ) -> TaskResultOut:
+    system_settings_service = request.app.state.system_settings_service
+    prompt_manager = request.app.state.prompt_manager
+    runtime_settings = await system_settings_service.get_runtime_settings(session, prompt_manager)
+
+    target_score = payload.target_score if payload.target_score is not None else runtime_settings.default_target_score
+    max_rounds = payload.max_rounds if payload.max_rounds is not None else runtime_settings.default_max_rounds
+    style = (payload.style or runtime_settings.default_style).strip()
+
+    if runtime_settings.available_styles and style not in runtime_settings.available_styles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Style not found: {style}",
+        )
+
     task = RewriteTask(
         user_id=user.id,
         input_text=payload.input_text,
-        target_score=payload.target_score,
-        max_rounds=payload.max_rounds,
-        style=payload.style,
+        target_score=target_score,
+        max_rounds=max_rounds,
+        style=style,
         status="queued",
         created_at=datetime.now(timezone.utc),
     )
@@ -155,13 +169,13 @@ async def create_task(
         stage="api",
         level="info",
         message="任务已提交，等待执行。",
-        detail={"target_score": payload.target_score, "max_rounds": payload.max_rounds},
+        detail={"target_score": target_score, "max_rounds": max_rounds, "style": style},
     )
     await write_audit_log(
         session,
         action="task.create",
         user_id=user.id,
-        detail={"target_score": payload.target_score, "max_rounds": payload.max_rounds, "style": payload.style},
+        detail={"target_score": target_score, "max_rounds": max_rounds, "style": style},
     )
     await session.commit()
     await session.refresh(task)

@@ -12,6 +12,7 @@ from app.services.external_skill_rules import ExternalSkillRulesLoader
 from app.services.llm_rewriter import LLMRewriter
 from app.services.prompt_manager import PromptManager
 from app.services.rewrite_agent import RewriteAgent
+from app.services.system_settings import SystemSettingsService
 from app.services.task_worker import TaskWorker
 
 
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     )
 
     prompt_manager = PromptManager(settings.prompts_root)
+    system_settings_service = SystemSettingsService(settings)
     detector = build_detector(settings)
     external_rules_loader = ExternalSkillRulesLoader(
         enabled=settings.external_skill_enabled_flag,
@@ -41,6 +43,7 @@ def create_app() -> FastAPI:
         llm_rewriter=llm_rewriter,
         detector=detector,
         external_rules_loader=external_rules_loader,
+        system_settings_service=system_settings_service,
     )
     task_worker = TaskWorker(
         session_factory=AsyncSessionFactory,
@@ -51,6 +54,7 @@ def create_app() -> FastAPI:
     app.state.prompt_manager = prompt_manager
     app.state.task_worker = task_worker
     app.state.external_rules_loader = external_rules_loader
+    app.state.system_settings_service = system_settings_service
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

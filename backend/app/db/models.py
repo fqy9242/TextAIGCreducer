@@ -48,6 +48,20 @@ class Role(Base):
     users: Mapped[list[User]] = relationship("User", secondary="user_roles", back_populates="roles")
 
 
+class SystemSettings(Base):
+    __tablename__ = "system_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class RewriteTask(Base):
     __tablename__ = "rewrite_tasks"
 

@@ -54,7 +54,7 @@ const router = createRouter({
           component: () => import("@/views/AdminView.vue"),
           meta: {
             title: "管理中心",
-            subtitle: "用户权限与 Prompt 配置管理",
+            subtitle: "用户权限、Prompt 与运行配置管理",
           },
         },
       ],

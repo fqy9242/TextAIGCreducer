@@ -3,16 +3,20 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { createUser, listUsers, updateUserRole } from "@/api/users";
 import { getPromptDetail, listPromptMetadata, reloadPrompts, updatePrompt } from "@/api/prompts";
-import type { PromptMeta, UserOut } from "@/types";
+import { getRuntimeSettings, updateRuntimeSettings } from "@/api/systemSettings";
+import type { PromptMeta, RuntimeSettings, UserOut } from "@/types";
 
 const users = ref<UserOut[]>([]);
 const prompts = ref<PromptMeta[]>([]);
 const loadingUsers = ref(false);
 const loadingPrompts = ref(false);
 const loadingPromptDetail = ref(false);
+const loadingSystemSettings = ref(false);
 const savingPrompt = ref(false);
+const savingSystemSettings = ref(false);
 const forbidden = ref(false);
 const selectedPromptKey = ref("");
+const runtimeStyleOptions = ref<string[]>([]);
 
 const createForm = reactive({
   username: "",
@@ -30,10 +34,24 @@ const promptForm = reactive({
   instruction: "",
 });
 
+const systemForm = reactive({
+  default_target_score: 20,
+  default_max_rounds: 3,
+  default_style: "deai_external",
+  use_mock_llm: "auto" as RuntimeSettings["use_mock_llm"],
+  openai_base_url: "https://api.openai.com/v1",
+  openai_model: "gpt-4o-mini",
+  openai_timeout_seconds: 60,
+  openai_max_retries: 0,
+  has_openai_api_key: false,
+  effective_llm_mode: "mock" as RuntimeSettings["effective_llm_mode"],
+});
+
 const promptLabel = computed(() => {
   if (!promptForm.group || !promptForm.name) return "";
   return `${promptForm.group}.${promptForm.name}`;
 });
+const llmModeTagType = computed(() => (systemForm.effective_llm_mode === "real" ? "success" : "info"));
 
 function toPromptKey(group: string, name: string): string {
   return `${group}:${name}`;
@@ -54,6 +72,20 @@ function parseVariables(value: string): string[] {
     .split(/[\n,，]/)
     .map((item) => item.trim())
     .filter((item, index, arr) => item.length > 0 && arr.indexOf(item) === index);
+}
+
+function applyRuntimeSettings(value: RuntimeSettings) {
+  systemForm.default_target_score = value.default_target_score;
+  systemForm.default_max_rounds = value.default_max_rounds;
+  systemForm.default_style = value.default_style;
+  systemForm.use_mock_llm = value.use_mock_llm;
+  systemForm.openai_base_url = value.openai_base_url;
+  systemForm.openai_model = value.openai_model;
+  systemForm.openai_timeout_seconds = value.openai_timeout_seconds;
+  systemForm.openai_max_retries = value.openai_max_retries;
+  systemForm.has_openai_api_key = value.has_openai_api_key;
+  systemForm.effective_llm_mode = value.effective_llm_mode;
+  runtimeStyleOptions.value = value.available_styles;
 }
 
 async function loadUsers() {
@@ -113,6 +145,18 @@ async function loadPrompts() {
   }
 }
 
+async function loadSystemSettings() {
+  loadingSystemSettings.value = true;
+  try {
+    const settings = await getRuntimeSettings();
+    applyRuntimeSettings(settings);
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail ?? "加载系统设置失败");
+  } finally {
+    loadingSystemSettings.value = false;
+  }
+}
+
 async function createNewUser() {
   if (!createForm.username || !createForm.password) {
     ElMessage.warning("请填写用户名和密码");
@@ -144,7 +188,7 @@ async function reloadPromptDefinitions() {
   try {
     await reloadPrompts();
     ElMessage.success("Prompt 已热重载");
-    await loadPrompts();
+    await Promise.all([loadPrompts(), loadSystemSettings()]);
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail ?? "Prompt 重载失败");
   }
@@ -195,7 +239,7 @@ async function savePromptChanges() {
       instruction: promptForm.instruction,
     });
     ElMessage.success("Prompt 保存成功");
-    await loadPrompts();
+    await Promise.all([loadPrompts(), loadSystemSettings()]);
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail ?? "Prompt 保存失败");
   } finally {
@@ -203,8 +247,39 @@ async function savePromptChanges() {
   }
 }
 
+async function saveSystemSettings() {
+  if (!systemForm.default_style.trim()) {
+    ElMessage.warning("默认策略不能为空");
+    return;
+  }
+  if (!systemForm.openai_base_url.trim() || !systemForm.openai_model.trim()) {
+    ElMessage.warning("Base URL 和模型名不能为空");
+    return;
+  }
+
+  savingSystemSettings.value = true;
+  try {
+    const settings = await updateRuntimeSettings({
+      default_target_score: systemForm.default_target_score,
+      default_max_rounds: systemForm.default_max_rounds,
+      default_style: systemForm.default_style,
+      use_mock_llm: systemForm.use_mock_llm,
+      openai_base_url: systemForm.openai_base_url.trim(),
+      openai_model: systemForm.openai_model.trim(),
+      openai_timeout_seconds: systemForm.openai_timeout_seconds,
+      openai_max_retries: systemForm.openai_max_retries,
+    });
+    applyRuntimeSettings(settings);
+    ElMessage.success("系统设置已保存");
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail ?? "系统设置保存失败");
+  } finally {
+    savingSystemSettings.value = false;
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([loadUsers(), loadPrompts()]);
+  await Promise.all([loadUsers(), loadPrompts(), loadSystemSettings()]);
 });
 </script>
 
@@ -224,6 +299,79 @@ onMounted(async () => {
       :closable="false"
       class="alert"
     />
+
+    <article class="app-card panel settings-panel" v-loading="loadingSystemSettings">
+      <div class="panel-head">
+        <div>
+          <h3>系统设置</h3>
+          <p class="panel-tip">除密钥外，任务默认值和 LLM 运行参数都从数据库读取，可在这里直接修改。</p>
+        </div>
+        <el-tag :type="llmModeTagType" effect="light">当前模式：{{ systemForm.effective_llm_mode }}</el-tag>
+      </div>
+
+      <el-alert
+        :title="
+          systemForm.has_openai_api_key
+            ? '已检测到环境变量中的 API Key；页面只管理非敏感参数。'
+            : '当前未检测到环境变量中的 API Key；auto 模式会自动回退到 Mock。'
+        "
+        :type="systemForm.has_openai_api_key ? 'info' : 'warning'"
+        show-icon
+        :closable="false"
+        class="settings-alert"
+      />
+
+      <el-form label-position="top">
+        <div class="settings-grid">
+          <el-form-item label="默认目标 AIGC 率(%)">
+            <el-input-number v-model="systemForm.default_target_score" :min="1" :max="100" />
+          </el-form-item>
+          <el-form-item label="默认最大轮次">
+            <el-input-number v-model="systemForm.default_max_rounds" :min="1" :max="10" />
+          </el-form-item>
+          <el-form-item label="默认策略">
+            <el-select v-model="systemForm.default_style">
+              <el-option
+                v-for="item in runtimeStyleOptions"
+                :key="item"
+                :label="item"
+                :value="item"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="LLM 模式">
+            <el-select v-model="systemForm.use_mock_llm">
+              <el-option label="auto" value="auto" />
+              <el-option label="强制 mock" value="true" />
+              <el-option label="强制 real" value="false" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="OpenAI Base URL">
+            <el-input v-model="systemForm.openai_base_url" />
+          </el-form-item>
+          <el-form-item label="OpenAI Model">
+            <el-input v-model="systemForm.openai_model" />
+          </el-form-item>
+          <el-form-item label="超时(秒)">
+            <el-input-number v-model="systemForm.openai_timeout_seconds" :min="1" :max="3600" />
+          </el-form-item>
+          <el-form-item label="重试次数">
+            <el-input-number v-model="systemForm.openai_max_retries" :min="0" :max="20" />
+          </el-form-item>
+        </div>
+
+        <div class="prompt-actions">
+          <el-button
+            type="primary"
+            :loading="savingSystemSettings || loadingSystemSettings"
+            @click="saveSystemSettings"
+          >
+            保存系统设置
+          </el-button>
+          <el-button :loading="loadingSystemSettings" @click="loadSystemSettings">重新加载</el-button>
+        </div>
+      </el-form>
+    </article>
 
     <div class="grid-two">
       <article class="app-card panel">
@@ -357,6 +505,27 @@ onMounted(async () => {
   color: #69809b;
 }
 
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-panel {
+  margin-bottom: 14px;
+}
+
+.settings-alert {
+  margin: 12px 0;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
 .create-form {
   display: grid;
   grid-template-columns: 1.1fr 1.1fr 120px 90px;
@@ -391,8 +560,9 @@ onMounted(async () => {
 }
 
 @media (max-width: 1200px) {
-  .prompt-head {
-    grid-template-columns: 1fr;
+  .prompt-head,
+  .settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -401,7 +571,13 @@ onMounted(async () => {
     justify-content: flex-start;
   }
 
-  .create-form {
+  .panel-head {
+    flex-direction: column;
+  }
+
+  .create-form,
+  .settings-grid,
+  .prompt-head {
     grid-template-columns: 1fr;
   }
 }

@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.models import Role, User
 from app.services.audit import write_audit_log
+from app.services.system_settings import SystemSettingsService
 
 
 ROLE_DESCRIPTIONS = {
@@ -19,8 +20,10 @@ ROLE_DESCRIPTIONS = {
 
 async def bootstrap_defaults(session_factory: async_sessionmaker) -> None:
     settings = get_settings()
+    system_settings_service = SystemSettingsService(settings)
     async with session_factory() as session:
         await ensure_roles(session)
+        await system_settings_service.ensure_initialized(session)
 
         existing_admin = await session.scalar(
             select(User)
@@ -58,4 +61,3 @@ async def ensure_roles(session) -> None:
 
     if dirty:
         await session.commit()
-
