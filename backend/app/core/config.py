@@ -46,10 +46,10 @@ class Settings(BaseSettings):
     detector_provider: str = "mock"
     detector_http_url: str = "http://127.0.0.1:9000/detect"
     detector_http_timeout_seconds: int = 20
-    task_execution_timeout_seconds: int = 500
+    task_execution_timeout_seconds: int = 1800
 
     external_skill_enabled: str = "true"
-    external_skill_repo_root: Path = ROOT_DIR / ".external" / "De-AI-Prompt-Enhancer-Writer-Booster-SKILL"
+    external_skill_repo_root: Path = ROOT_DIR / "backend" / "skills"
     external_skill_mode: str = "de-AI-writing"
     external_skill_max_items: int = 12
 

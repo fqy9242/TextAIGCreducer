@@ -29,7 +29,8 @@ class ExternalSkillRulesLoader:
                 self._compact_rules = ""
             return
 
-        source_file = self.repo_root / self.mode / "SKILL.md"
+        skill_dir = self.repo_root / self.mode
+        source_file = skill_dir / "SKILL.md"
         if not source_file.exists():
             with self._lock:
                 self._source_file = ""
@@ -37,11 +38,21 @@ class ExternalSkillRulesLoader:
             return
 
         text = source_file.read_text(encoding="utf-8", errors="ignore")
-        compact_rules = self._extract_compact_rules(text, self.max_items)
+        rules_text = self._extract_compact_rules(text, self.max_items)
+
+        # 尝试读取引用的额外规则文件
+        references_dir = skill_dir / "references"
+        if references_dir.exists() and references_dir.is_dir():
+            ref_texts = []
+            for ref_file in sorted(references_dir.glob("*.md")):
+                content = ref_file.read_text(encoding="utf-8", errors="ignore")
+                ref_texts.append(f"\n\n### 【引用附件: {ref_file.name}】 ###\n{content}")
+            if ref_texts:
+                rules_text += "".join(ref_texts)
 
         with self._lock:
             self._source_file = str(source_file)
-            self._compact_rules = compact_rules
+            self._compact_rules = rules_text
 
     def build_instruction_suffix(self) -> str:
         with self._lock:

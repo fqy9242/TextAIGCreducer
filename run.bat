@@ -106,26 +106,13 @@ if not exist "frontend\.env" (
 exit /b 0
 
 :ensure_external_repo
-set "EXT_DIR=.external\De-AI-Prompt-Enhancer-Writer-Booster-SKILL"
+set "EXT_DIR=backend\skills"
 if exist "%EXT_DIR%\de-AI-writing\SKILL.md" (
-    echo External skill repo already available.
+    echo External skill repo already available in %EXT_DIR%.
     exit /b 0
 )
 
-where git >nul 2>nul
-if errorlevel 1 (
-    echo git not found. External skill repo will be skipped.
-    exit /b 0
-)
-
-if not exist ".external" mkdir ".external"
-echo Cloning external skill repo...
-git clone --depth 1 https://github.com/OUBIGFA/De-AI-Prompt-Enhancer-Writer-Booster-SKILL.git "%EXT_DIR%"
-if errorlevel 1 (
-    echo Warning: failed to clone external skill repo. Continue without external rules.
-    exit /b 0
-)
-echo External skill repo cloned.
+echo External skill repo not found. Please ensure backend/skills contains the de-AI-writing rules.
 exit /b 0
 
 :ensure_backend_deps
