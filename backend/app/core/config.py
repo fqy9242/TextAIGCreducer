@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     openai_max_retries: int = 0
 
     task_execution_timeout_seconds: int = 1800
+    task_worker_concurrency: int = 2
 
     external_skill_enabled: str = "true"
     external_skill_repo_root: Path = ROOT_DIR / "backend" / "skills"

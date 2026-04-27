@@ -11,6 +11,7 @@ export interface TaskIteration {
   rewritten_text: string;
   detector_score: number;
   detector_label: "ai_like" | "human_like" | "uncertain";
+  llm_mode?: string | null;
   latency_ms: number;
   created_at: string;
 }

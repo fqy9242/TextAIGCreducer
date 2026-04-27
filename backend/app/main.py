@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
         session_factory=AsyncSessionFactory,
         rewrite_agent=rewrite_agent,
         execution_timeout_seconds=settings.task_execution_timeout_seconds,
+        worker_concurrency=settings.task_worker_concurrency,
     )
 
     app.state.prompt_manager = prompt_manager

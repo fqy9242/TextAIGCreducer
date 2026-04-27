@@ -39,9 +39,9 @@ async function onSubmit() {
             <div class="brand-badge">TextOps Console</div>
           </div>
           
-          <h1 class="brand-title">文本改写与<br />AIGC 风险控制系统</h1>
+          <h1 class="brand-title">文本改写与AIGC 风险控制系统</h1>
           <p class="brand-desc">
-            面向业务团队的专业改写控制台，支持任务闭环、历史追踪、权限治理与 Prompt 在线管理。
+            "用魔法打败魔法 通过AI降低AI率"
           </p>
 
           <div class="metrics-grid">
@@ -50,8 +50,8 @@ async function onSubmit() {
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               </div>
               <div class="metric-info">
-                <div class="metric-value">≤ 20%</div>
-                <div class="metric-label">默认查重阈值</div>
+                <div class="metric-value">自定义</div>
+                <div class="metric-label">查重阈值</div>
               </div>
             </div>
             <div class="metric-item">
@@ -59,8 +59,8 @@ async function onSubmit() {
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
               </div>
               <div class="metric-info">
-                <div class="metric-value">3 轮</div>
-                <div class="metric-label">最大迭代轮次</div>
+                <div class="metric-value">多轮</div>
+                <div class="metric-label">迭代轮次</div>
               </div>
             </div>
             <div class="metric-item">
@@ -68,13 +68,13 @@ async function onSubmit() {
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
               </div>
               <div class="metric-info">
-                <div class="metric-value">deai_external</div>
-                <div class="metric-label">核心策略模式</div>
+                <div class="metric-value">自定义</div>
+                <div class="metric-label">策略模式</div>
               </div>
             </div>
           </div>
 
-          <ul class="feature-list">
+          <!-- <ul class="feature-list">
             <li>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
               改写 → 检测 → 决策闭环自动执行
@@ -87,7 +87,7 @@ async function onSubmit() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
               管理员在线管理 Prompt 与用户权限
             </li>
-          </ul>
+          </ul> -->
         </div>
       </section>
 

@@ -44,7 +44,8 @@
 
 ## 核心能力
 
-- 异步任务状态机：`queued/running/success/not_met/failed`
+- 异步任务状态机：`queued/running/success/not_met/failed/cancelled`
+- 后端任务执行器支持多 worker 并发消费队列
 - 闭环节点：`load_prompt -> rewrite_with_llm -> detect_score -> decide_next -> persist_iteration`
 - 达标规则：任一轮 `score <= target_score` 立即成功
 - 未达标规则：达到最大轮次返回最低分版本并标记 `not_met`
@@ -112,6 +113,7 @@ Copy-Item frontend\.env.example frontend\.env
 注意：
 - `OPENAI_API_KEY` 仍然只从 `backend/.env` 读取
 - 当 `use_mock_llm=auto` 且未配置 `OPENAI_API_KEY` 时，系统会自动退回 Mock 模式
+- 任务队列并发度通过 `backend/.env` 中的 `TASK_WORKER_CONCURRENCY` 配置
 
 ### 4) 升级已有数据库
 

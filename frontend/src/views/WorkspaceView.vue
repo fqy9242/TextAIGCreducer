@@ -1,33 +1,52 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { cancelTask } from "@/api/tasks";
 import { getRuntimeSettings } from "@/api/systemSettings";
 import { useTaskStore } from "@/stores/task";
 import ScoreTag from "@/components/ScoreTag.vue";
-import type { RuntimeSettings } from "@/types";
+import type { RuntimeSettings, TaskResult } from "@/types";
 
 const router = useRouter();
 const taskStore = useTaskStore();
 const runtimeSettings = ref<RuntimeSettings | null>(null);
 const loadingSettings = ref(false);
+const submitting = ref(false);
+const refreshingTasks = ref(false);
+const latestTaskId = ref("");
+const selectedTaskId = ref("");
+const refreshTimer = ref<number | null>(null);
+const knownStatuses = new Map<string, string>();
 
 const form = reactive({
-  input_text:
-    "",
+  input_text: "",
   target_score: 20,
   max_rounds: 3,
   style: "deai_external",
 });
 
-const working = ref(false);
-const latestTaskId = ref("");
 const styleOptions = computed(() => {
   if (runtimeSettings.value?.available_styles?.length) {
     return runtimeSettings.value.available_styles;
   }
   return [form.style];
 });
+const trackedTasks = computed(() => taskStore.trackedTasks);
+const selectedTask = computed(() => {
+  if (trackedTasks.value.length === 0) return null;
+  return trackedTasks.value.find((task) => task.id === selectedTaskId.value) ?? trackedTasks.value[0];
+});
+const queuedCount = computed(() => trackedTasks.value.filter((task) => task.status === "queued").length);
+const runningCount = computed(() => trackedTasks.value.filter((task) => task.status === "running").length);
+const finishedCount = computed(() => trackedTasks.value.filter((task) => taskStore.isFinalStatus(task.status)).length);
+
+function statusTagType(status: string): "info" | "warning" | "success" | "danger" {
+  if (status === "success") return "success";
+  if (status === "not_met" || status === "queued") return "warning";
+  if (status === "failed" || status === "cancelled") return "danger";
+  return "info";
+}
 
 function formatElapsed(seconds: number | null | undefined): string {
   if (seconds == null) return "--";
@@ -41,6 +60,51 @@ function formatElapsed(seconds: number | null | undefined): string {
       .padStart(2, "0")}`;
   }
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatShortTaskId(taskId: string): string {
+  if (!taskId) return "";
+  return taskId.length <= 8 ? taskId : `...${taskId.slice(-8)}`;
+}
+
+function ensureSelection(): void {
+  if (trackedTasks.value.length === 0) {
+    selectedTaskId.value = "";
+    return;
+  }
+  if (!trackedTasks.value.some((task) => task.id === selectedTaskId.value)) {
+    selectedTaskId.value = trackedTasks.value[0].id;
+  }
+}
+
+function selectTask(taskId: string): void {
+  selectedTaskId.value = taskId;
+}
+
+function taskRowClassName(payload: { row: TaskResult }): string {
+  return payload.row.id === selectedTaskId.value ? "is-selected-row" : "";
+}
+
+function onTaskRowClick(row: TaskResult): void {
+  selectTask(row.id);
+}
+
+function notifyFinishedTasks(): void {
+  for (const task of trackedTasks.value) {
+    const previousStatus = knownStatuses.get(task.id);
+    if (previousStatus && previousStatus !== task.status && taskStore.isFinalStatus(task.status)) {
+      if (task.status === "success") {
+        ElMessage.success(`任务 ${task.id.slice(0, 8)} 达标完成`);
+      } else if (task.status === "not_met") {
+        ElMessage.warning(`任务 ${task.id.slice(0, 8)} 已达到最大轮次`);
+      } else if (task.status === "cancelled") {
+        ElMessage.warning(`任务 ${task.id.slice(0, 8)} 已取消`);
+      } else if (task.status === "failed") {
+        ElMessage.error(task.error_message ?? `任务 ${task.id.slice(0, 8)} 执行失败`);
+      }
+    }
+    knownStatuses.set(task.id, task.status);
+  }
 }
 
 async function loadRuntimeConfig() {
@@ -58,13 +122,29 @@ async function loadRuntimeConfig() {
   }
 }
 
+async function refreshWorkspaceTasks(showError = false) {
+  if (refreshingTasks.value) return;
+  refreshingTasks.value = true;
+  try {
+    await taskStore.refreshTrackedTasks();
+    ensureSelection();
+    notifyFinishedTasks();
+  } catch (error: any) {
+    if (showError) {
+      ElMessage.error(error?.response?.data?.detail ?? "刷新任务状态失败");
+    }
+  } finally {
+    refreshingTasks.value = false;
+  }
+}
+
 async function submitTask() {
   if (form.input_text.trim().length < 20) {
     ElMessage.warning("文本至少需要 20 个字符");
     return;
   }
 
-  working.value = true;
+  submitting.value = true;
   try {
     const task = await taskStore.submitTask({
       input_text: form.input_text,
@@ -73,39 +153,79 @@ async function submitTask() {
       style: form.style,
     });
     latestTaskId.value = task.id;
-    ElMessage.success("任务已提交，正在执行闭环改写");
-    const finalTask = await taskStore.pollTask(task.id, 60, 1000);
-    if (finalTask.status === "success") {
-      ElMessage.success("任务达标完成");
-    } else if (finalTask.status === "not_met") {
-      ElMessage.warning("达到最大轮次，已返回最优版本");
-    } else if (finalTask.status === "failed") {
-      ElMessage.error(finalTask.error_message ?? "任务执行失败");
-    } else {
-      ElMessage.info("任务仍在排队或执行中，可到历史任务或任务详情继续查看");
-    }
+    selectedTaskId.value = task.id;
+    knownStatuses.set(task.id, task.status);
+    ElMessage.success("任务已提交，已加入并发执行队列");
+    await refreshWorkspaceTasks();
   } catch (error: any) {
     const message = error?.response?.data?.detail ?? "任务提交失败";
     ElMessage.error(String(message));
   } finally {
-    working.value = false;
+    submitting.value = false;
   }
 }
 
 function openTaskDetail() {
-  if (!latestTaskId.value) return;
-  router.push({ name: "task-detail", params: { id: latestTaskId.value } });
+  const taskId = selectedTask.value?.id || latestTaskId.value;
+  if (!taskId) return;
+  router.push({ name: "task-detail", params: { id: taskId } });
+}
+
+function openSpecificTaskDetail(taskId: string) {
+  if (!taskId) return;
+  router.push({ name: "task-detail", params: { id: taskId } });
+}
+
+async function cancelTrackedTask(task: TaskResult) {
+  try {
+    await ElMessageBox.confirm("确定要终止该任务吗？", "提示", {
+      confirmButtonText: "确定",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+    await cancelTask(task.id);
+    ElMessage.success("任务已成功终止");
+    await taskStore.fetchTask(task.id, { setCurrent: false, track: true });
+    ensureSelection();
+    notifyFinishedTasks();
+  } catch (error: any) {
+    if (error !== "cancel") {
+      const message = error?.response?.data?.detail ?? error?.message ?? "终止任务失败";
+      ElMessage.error(String(message));
+    }
+  }
+}
+
+function clearFinishedTasks() {
+  taskStore.clearFinishedTrackedTasks();
+  ensureSelection();
 }
 
 onMounted(async () => {
   await loadRuntimeConfig();
+  await refreshWorkspaceTasks();
+  ensureSelection();
+  refreshTimer.value = window.setInterval(() => {
+    void refreshWorkspaceTasks();
+  }, 2000);
+});
+
+onUnmounted(() => {
+  if (refreshTimer.value != null) {
+    window.clearInterval(refreshTimer.value);
+    refreshTimer.value = null;
+  }
 });
 </script>
 
 <template>
   <section>
     <div class="page-actions">
-      <el-button type="primary" :disabled="!latestTaskId" @click="openTaskDetail">查看最新任务</el-button>
+      <div class="actions">
+        <el-button @click="refreshWorkspaceTasks(true)" :loading="refreshingTasks">刷新状态</el-button>
+        <el-button @click="clearFinishedTasks" :disabled="finishedCount === 0">清理已完成</el-button>
+        <el-button type="primary" :disabled="!selectedTask && !latestTaskId" @click="openTaskDetail">查看任务详情</el-button>
+      </div>
     </div>
 
     <div class="kpi-row" v-loading="loadingSettings">
@@ -118,8 +238,12 @@ onMounted(async () => {
         <strong>{{ form.target_score }}%</strong>
       </div>
       <div class="kpi-card">
-        <span>最大轮次</span>
-        <strong>{{ form.max_rounds }} 轮</strong>
+        <span>排队 / 执行中</span>
+        <strong>{{ queuedCount }} / {{ runningCount }}</strong>
+      </div>
+      <div class="kpi-card">
+        <span>已完成追踪</span>
+        <strong>{{ finishedCount }}</strong>
       </div>
     </div>
 
@@ -149,34 +273,80 @@ onMounted(async () => {
               </el-select>
             </el-form-item>
           </div>
-          <el-button type="primary" :loading="working" class="submit-btn" @click="submitTask">启动智能改写</el-button>
+          <el-button type="primary" :loading="submitting" class="submit-btn" @click="submitTask">启动智能改写</el-button>
         </el-form>
       </article>
 
       <article class="app-card panel side-panel">
-        <h3>任务状态</h3>
-        <el-empty v-if="!taskStore.currentTask" description="尚未提交任务" />
+        <div class="side-head">
+          <h3>实时任务看板</h3>
+          <span>{{ trackedTasks.length }} 个追踪任务</span>
+        </div>
+        <el-empty v-if="trackedTasks.length === 0" description="尚未提交任务" />
         <template v-else>
-          <el-descriptions :column="1" border>
+          <el-table
+            :data="trackedTasks"
+            size="small"
+            max-height="260"
+            row-key="id"
+            :row-class-name="taskRowClassName"
+            @row-click="onTaskRowClick"
+          >
+            <el-table-column prop="id" label="任务ID" width="110">
+              <template #default="{ row }">
+                <span class="mono-id" :title="row.id">{{ formatShortTaskId(row.id) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="110">
+              <template #default="{ row }">
+                <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="分数" width="100">
+              <template #default="{ row }">
+                <ScoreTag :score="row.best_score" />
+              </template>
+            </el-table-column>
+            <el-table-column label="时长" width="90">
+              <template #default="{ row }">
+                {{ formatElapsed(row.elapsed_seconds) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="120" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click.stop="openSpecificTaskDetail(row.id)">详情</el-button>
+                <el-button
+                  v-if="['queued', 'running'].includes(row.status)"
+                  link
+                  type="danger"
+                  @click.stop="cancelTrackedTask(row)"
+                >
+                  终止
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <el-descriptions v-if="selectedTask" :column="1" border class="selected-task">
             <el-descriptions-item label="任务ID">
-              <span class="mono-id">{{ taskStore.currentTask.id }}</span>
+              <span class="mono-id">{{ selectedTask.id }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="状态">{{ taskStore.currentTask.status }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ selectedTask.status }}</el-descriptions-item>
             <el-descriptions-item label="最佳分数">
-              <ScoreTag :score="taskStore.currentTask.best_score" />
+              <ScoreTag :score="selectedTask.best_score" />
             </el-descriptions-item>
             <el-descriptions-item label="已用轮次">
-              {{ taskStore.currentTask.rounds_used }} / {{ taskStore.currentTask.max_rounds }}
+              {{ selectedTask.rounds_used }} / {{ selectedTask.max_rounds }}
             </el-descriptions-item>
             <el-descriptions-item label="已执行时间">
-              {{ formatElapsed(taskStore.currentTask.elapsed_seconds) }}
+              {{ formatElapsed(selectedTask.elapsed_seconds) }}
             </el-descriptions-item>
           </el-descriptions>
-          <h4>最佳文本</h4>
+          <h4>最佳文本预览</h4>
           <el-input
             type="textarea"
             :rows="12"
-            :model-value="taskStore.currentTask.best_text ?? ''"
+            :model-value="selectedTask?.best_text ?? ''"
             readonly
           />
         </template>
@@ -194,6 +364,11 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
 }
 
 .kpi-row {
@@ -233,18 +408,48 @@ onMounted(async () => {
   min-width: 130px;
 }
 
-.side-panel h3 {
-  margin-top: 0;
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 10px;
+}
+
+.side-head h3 {
+  margin: 0;
+}
+
+.side-head span {
+  color: #657d99;
+  font-size: 12px;
 }
 
 .side-panel h4 {
   margin: 16px 0 8px;
 }
 
+.selected-task {
+  margin-top: 14px;
+}
+
+.mono-id {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+:deep(.el-table .is-selected-row > td) {
+  background: #eef6ff !important;
+}
+
 @media (max-width: 900px) {
   .page-actions {
     justify-content: flex-start;
+  }
+
+  .actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .kpi-row {
@@ -253,6 +458,10 @@ onMounted(async () => {
 
   .params {
     grid-template-columns: 1fr;
+  }
+
+  :deep(.el-table__body-wrapper) {
+    overflow-x: auto;
   }
 }
 </style>

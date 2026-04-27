@@ -8,6 +8,7 @@ import { useRoute, useRouter } from "vue-router";
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const repoUrl = "https://github.com/fqy9242/TextReduceAIGCrate";
 
 const activePath = computed(() => route.path);
 const routeTitle = computed(() => String(route.meta.title ?? "控制台"));
@@ -74,6 +75,13 @@ async function handleLogout() {
         </div>
         <div class="topbar-actions">
           <el-tag type="success" effect="light">Online</el-tag>
+          <a class="repo-action" :href="repoUrl" target="_blank" rel="noreferrer" title="GitHub 仓库" aria-label="GitHub 仓库">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="github-icon">
+              <path
+                d="M12 1.5C6.201 1.5 1.5 6.201 1.5 12c0 4.64 3.009 8.577 7.183 9.966.525.097.717-.228.717-.506 0-.25-.009-.912-.014-1.79-2.922.635-3.539-1.408-3.539-1.408-.477-1.211-1.165-1.533-1.165-1.533-.952-.651.072-.638.072-.638 1.052.074 1.606 1.08 1.606 1.08.936 1.603 2.456 1.14 3.054.872.095-.678.366-1.14.665-1.402-2.333-.266-4.785-1.166-4.785-5.191 0-1.146.409-2.083 1.079-2.818-.109-.266-.467-1.336.102-2.784 0 0 .88-.282 2.884 1.077A9.992 9.992 0 0 1 12 6.844c.893.004 1.792.121 2.633.355 2.002-1.359 2.881-1.077 2.881-1.077.571 1.448.213 2.518.104 2.784.672.735 1.077 1.672 1.077 2.818 0 4.035-2.456 4.921-4.797 5.182.376.324.711.963.711 1.941 0 1.402-.013 2.533-.013 2.878 0 .281.189.608.723.505C19.494 20.573 22.5 16.638 22.5 12c0-5.799-4.701-10.5-10.5-10.5Z"
+              />
+            </svg>
+          </a>
           <el-button type="primary" plain @click="handleLogout">退出登录</el-button>
         </div>
       </header>
@@ -231,6 +239,32 @@ async function handleLogout() {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.repo-action {
+  height: 32px;
+  width: 32px;
+  border-radius: 50%;
+  border: 1px solid #d4deed;
+  background: rgba(255, 255, 255, 0.75);
+  color: #32506f;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.repo-action:hover {
+  background: #f2f7fd;
+  border-color: #b7cae3;
+  color: #1f3f61;
+}
+
+.github-icon {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
 
 .content-area {

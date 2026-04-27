@@ -29,6 +29,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 os.environ.setdefault("ADMIN_BOOTSTRAP_USERNAME", "admin")
 os.environ.setdefault("ADMIN_BOOTSTRAP_PASSWORD", "Admin@123456")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 
 from app.core.config import get_settings  # noqa: E402

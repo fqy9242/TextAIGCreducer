@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,14 +21,18 @@ class TaskWorker:
         session_factory: async_sessionmaker,
         rewrite_agent: RewriteAgent,
         execution_timeout_seconds: int = 180,
+        worker_concurrency: int = 1,
     ):
         self.session_factory = session_factory
         self.rewrite_agent = rewrite_agent
         self.execution_timeout_seconds = max(1, execution_timeout_seconds)
+        self.worker_concurrency = max(1, worker_concurrency)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
-        self._worker_task: Optional[asyncio.Task] = None
-        self._current_task_id: Optional[str] = None
-        self._current_execution_task: Optional[asyncio.Task] = None
+        self._worker_tasks: list[asyncio.Task] = []
+        self._running_tasks: dict[str, asyncio.Task] = {}
+        self._queued_task_ids: set[str] = set()
+        self._cancel_requested_task_ids: set[str] = set()
+        self._state_lock = asyncio.Lock()
         self._running = False
 
     async def start(self) -> None:
@@ -37,26 +40,41 @@ class TaskWorker:
             return
         self._running = True
         await self.recover_pending_tasks()
-        self._worker_task = asyncio.create_task(self._worker_loop(), name="rewrite-task-worker")
+        self._worker_tasks = [
+            asyncio.create_task(
+                self._worker_loop(worker_index + 1),
+                name=f"rewrite-task-worker-{worker_index + 1}",
+            )
+            for worker_index in range(self.worker_concurrency)
+        ]
 
     async def stop(self) -> None:
         self._running = False
-        if self._worker_task:
-            self._worker_task.cancel()
+        worker_tasks = list(self._worker_tasks)
+        self._worker_tasks.clear()
+        for worker_task in worker_tasks:
+            worker_task.cancel()
+        for worker_task in worker_tasks:
             try:
-                await self._worker_task
+                await worker_task
             except asyncio.CancelledError:
                 pass
-            self._worker_task = None
 
     async def enqueue(self, task_id: str) -> None:
-        await self.queue.put(task_id)
+        async with self._state_lock:
+            if task_id in self._queued_task_ids or task_id in self._running_tasks:
+                return
+            self._queued_task_ids.add(task_id)
+            self.queue.put_nowait(task_id)
 
     async def cancel_task(self, task_id: str) -> bool:
-        if self._current_task_id == task_id and self._current_execution_task:
-            self._current_execution_task.cancel()
+        async with self._state_lock:
+            execution_task = self._running_tasks.get(task_id)
+            if execution_task is None:
+                return False
+            self._cancel_requested_task_ids.add(task_id)
+            execution_task.cancel()
             return True
-        return False
 
     async def recover_pending_tasks(self) -> None:
         async with self.session_factory() as session:
@@ -64,15 +82,21 @@ class TaskWorker:
                 select(RewriteTask.id).where(RewriteTask.status.in_(["queued", "running"]))
             )
             for task_id in result.all():
-                await self.queue.put(task_id)
+                await self.enqueue(task_id)
 
-    async def _worker_loop(self) -> None:
+    async def _worker_loop(self, worker_index: int) -> None:
         while self._running:
             task_id = await self.queue.get()
+            await self._mark_task_dequeued(task_id)
             try:
                 await self._process_task(task_id)
             except Exception as exc:  # pragma: no cover - defensive guard
-                logger.exception("Task worker loop failed for task_id=%s: %s", task_id, exc)
+                logger.exception(
+                    "Task worker %s failed for task_id=%s: %s",
+                    worker_index,
+                    task_id,
+                    exc,
+                )
                 await self._mark_task_failed(task_id, str(exc))
             finally:
                 self.queue.task_done()
@@ -85,6 +109,7 @@ class TaskWorker:
             if task.status not in {"queued", "running"}:
                 return
 
+            recovered = task.status == "running"
             task.status = "running"
             if task.started_at is None:
                 task.started_at = datetime.now(timezone.utc)
@@ -93,33 +118,42 @@ class TaskWorker:
                 task_id=task.id,
                 stage="worker",
                 level="info",
-                message="任务进入执行队列，开始处理。",
-                detail={"status": task.status},
+                message="任务恢复执行。" if recovered else "任务进入执行队列，开始处理。",
+                detail={"status": task.status, "recovered": recovered},
             )
             await session.commit()
 
+            execution_task = asyncio.create_task(
+                self.rewrite_agent.run_task(session, task),
+                name=f"rewrite-task-execution-{task_id}",
+            )
+            await self._mark_task_running(task_id, execution_task)
+
             try:
-                self._current_task_id = task_id
-                self._current_execution_task = asyncio.create_task(
-                    self.rewrite_agent.run_task(session, task)
-                )
                 await asyncio.wait_for(
-                    self._current_execution_task,
+                    execution_task,
                     timeout=self.execution_timeout_seconds,
                 )
             except asyncio.CancelledError:
                 await session.rollback()
-                await self._fail_task(
-                    session=session,
-                    task_id=task_id,
-                    error_message="Task was cancelled by user.",
-                    message="任务已手动取消。",
-                    detail={"cancelled": True},
-                    final_status="failed" # Use failed for now or we can pass status="failed"
-                )
+                if await self._consume_cancel_request(task_id):
+                    await self._finalize_task(
+                        session=session,
+                        task_id=task_id,
+                        error_message="任务已手动取消。",
+                        message="任务已手动取消。",
+                        detail={"cancelled": True},
+                        final_status="cancelled",
+                        level="warning",
+                    )
+                else:
+                    logger.info(
+                        "Task execution interrupted before completion; leaving it for recovery. task_id=%s",
+                        task_id,
+                    )
             except asyncio.TimeoutError:
                 await session.rollback()
-                await self._fail_task(
+                await self._finalize_task(
                     session=session,
                     task_id=task_id,
                     error_message=f"Task execution timeout after {self.execution_timeout_seconds} seconds",
@@ -142,7 +176,7 @@ class TaskWorker:
                         "Increase openai_timeout_seconds in system settings "
                         "or check openai_base_url/model/network."
                     )
-                await self._fail_task(
+                await self._finalize_task(
                     session=session,
                     task_id=task_id,
                     error_message=str(exc),
@@ -150,8 +184,7 @@ class TaskWorker:
                     detail=detail,
                 )
             finally:
-                self._current_task_id = None
-                self._current_execution_task = None
+                await self._clear_running_task(task_id)
 
     async def _mark_task_failed(self, task_id: str, message: str) -> None:
         async with self.session_factory() as session:
@@ -171,7 +204,26 @@ class TaskWorker:
             )
             await session.commit()
 
-    async def _fail_task(
+    async def _mark_task_dequeued(self, task_id: str) -> None:
+        async with self._state_lock:
+            self._queued_task_ids.discard(task_id)
+
+    async def _mark_task_running(self, task_id: str, execution_task: asyncio.Task) -> None:
+        async with self._state_lock:
+            self._running_tasks[task_id] = execution_task
+
+    async def _clear_running_task(self, task_id: str) -> None:
+        async with self._state_lock:
+            self._running_tasks.pop(task_id, None)
+
+    async def _consume_cancel_request(self, task_id: str) -> bool:
+        async with self._state_lock:
+            if task_id in self._cancel_requested_task_ids:
+                self._cancel_requested_task_ids.remove(task_id)
+                return True
+            return False
+
+    async def _finalize_task(
         self,
         *,
         session: AsyncSession,
@@ -180,6 +232,7 @@ class TaskWorker:
         message: str,
         detail: dict,
         final_status: str = "failed",
+        level: str = "error",
     ) -> None:
         task = await session.scalar(select(RewriteTask).where(RewriteTask.id == task_id))
         if task is None:
@@ -191,7 +244,7 @@ class TaskWorker:
             session,
             task_id=task_id,
             stage="worker",
-            level="error",
+            level=level,
             message=message,
             detail=detail,
         )
